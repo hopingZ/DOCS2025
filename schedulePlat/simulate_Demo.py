@@ -5,10 +5,10 @@ import pandas as pd
 # 运行仿真
 if __name__ == '__main__':
     # 0. 配置竞赛案例
-    instance_name = 'num10000_lam0.0083_change0__10.txt'
+    instance_name = 'num1000_lam0.03_change0__1.txt'
     instance_names = []
 
-    path = os.path.join('schedulePlat', 'data', 'instance', 'competition', instance_name)
+    path = os.path.join('data', 'instance', 'competition', instance_name)
 
     # 打印当前工作目录和文件路径，以便调试
     print("当前工作目录是:", os.getcwd())
