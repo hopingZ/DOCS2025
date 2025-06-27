@@ -5,7 +5,8 @@ import pandas as pd
 # 运行仿真
 if __name__ == '__main__':
     # 0. 配置竞赛案例
-    instance_name = 'num1000_lam0.03_change0__1.txt'
+    # instance_name = 'num1000_lam0.03_change0__1.txt'
+    instance_name = 'simple_demo.txt'
     instance_names = []
     path = os.path.join('data', 'instance', 'competition', instance_name)
 

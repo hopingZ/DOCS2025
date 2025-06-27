@@ -1,11 +1,54 @@
 import pandas as pd
 
 
-
 # 参赛队伍算法（请封装成类）
 class SchedulingAlgorithm:
     def __init__(self):
         ...
+
+    @staticmethod
+    def get_system_info(MBOM):
+        '''MBOM_dict = {
+            'product_type':    {0: '0', 1: '0', 2: '0', 3: '0', 4: '0', 5: '0', 6: '1', 7: '1', 8: '1', 9: '1', 10: '1', 11: '1'},
+            'stage':           {0: '0', 1: '0', 2: '0', 3: '1', 4: '1', 5: '1', 6: '0', 7: '0', 8: '0', 9: '1', 10: '1', 11: '1'},
+            'machine_id':      {0: '0', 1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '0', 7: '1', 8: '2', 9: '3', 10: '4', 11: '5'},
+            'process_time(s)': {0: 27, 1: 35, 2: 36, 3: 26, 4: 25, 5: 24, 6: 48, 7: 28, 8: 23, 9: 25, 10: 38, 11: 43}
+        }'''
+        # 如果输入是字典，转换为DataFrame
+        if isinstance(MBOM, dict):
+            df = pd.DataFrame(MBOM)
+        else:
+            df = MBOM
+
+        # 获取唯一的产品类型和阶段，并按数值排序
+        product_types = sorted(map(int, df['product_type'].unique()))
+        stages = sorted(map(int, df['stage'].unique()))
+        num_types = len(product_types)
+        num_stages = len(stages)
+
+        # 初始化结果结构：每个阶段一个字典
+        result = [{} for _ in stages]
+
+        # 为每个阶段构建机器字典
+        for stage_idx in stages:
+            stage_str = str(stage_idx)
+            stage_data = df[df['stage'] == stage_str]
+
+            for _, row in stage_data.iterrows():
+                # machine_id = 'M' + str(row['machine_id'])
+                machine_id = int(row['machine_id'])
+                product_type = int(row['product_type'])
+                time = row['process_time(s)']
+
+                # 如果机器尚未在字典中，初始化全None列表
+                if machine_id not in result[stage_idx]:
+                    result[stage_idx][machine_id] = [None] * len(product_types)
+
+                # 将处理时间放入对应位置
+                result[stage_idx][machine_id][product_type] = time
+
+        # [{'M0': [27, 48], 'M1': [35, 28], 'M2': [36, 23]}, {'M3': [26, 25], 'M4': [25, 38], 'M5': [24, 43]}]
+        return result, num_types, num_stages
 
     def generate_schedule(self, platform) -> pd.DataFrame:
         """
@@ -74,6 +117,14 @@ class SchedulingAlgorithm:
                 - machine_id: 可用于该工序的设备ID
                 - process_time(s): 在该设备上完成该工序所需的处理时间（秒）
         """
+        process_time_info, num_types, num_stages = self.get_system_info(MBOM)
+        '''MBOM_dict = {
+            'product_type':    {0: '0', 1: '0', 2: '0', 3: '0', 4: '0', 5: '0', 6: '1', 7: '1', 8: '1', 9: '1', 10: '1', 11: '1'},
+            'stage':           {0: '0', 1: '0', 2: '0', 3: '1', 4: '1', 5: '1', 6: '0', 7: '0', 8: '0', 9: '1', 10: '1', 11: '1'},
+            'machine_id':      {0: '0', 1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '0', 7: '1', 8: '2', 9: '3', 10: '4', 11: '5'},
+            'process_time(s)': {0: 27, 1: 35, 2: 36, 3: 26, 4: 25, 5: 24, 6: 48, 7: 28, 8: 23, 9: 25, 10: 38, 11: 43}
+        }'''
+
         # 获取当前时刻
         current_time = platform.getSimulationTime()
         """
