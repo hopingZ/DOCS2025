@@ -9,4 +9,6 @@ DOCS2025第一届“辽河杯”数据驱动的复杂系统优化算法竞赛：
 
 6.26   更新competitionPlatform，修复“最后一个订单到达时，无法动态调度”的问题。
 
-6.37   更新competitionPlatform，修复Linux平台读取包错误的问题。
+6.27   更新competitionPlatform，修复Linux平台读取包错误的问题。
+
+6.30   更新competitionPlatform，修复“getOrders函数在设置了only_unfinished=False时报错”的问题。
