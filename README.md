@@ -13,3 +13,6 @@ DOCS2025第一届“辽河杯”数据驱动的复杂系统优化算法竞赛：
 
 6.30   更新competitionPlatform，修复“getOrders函数在设置了only_unfinished=False时报错”的问题。  
        当only_unfinished=False时，已完成订单的start_time和end_time,即为订单的第一阶段的开始生产时间和最后阶段的结束时间。
+
+7.1    更新competitionPlatform、 simulation、infobuilder、calendarinfo，修复“某些时刻，machines_status中处理时间与MBOM中不一致”的问题
+       增加同一工件只有前阶段完成，后阶段才可以处理。修复“同一工件多阶段可并行处理”的问题
