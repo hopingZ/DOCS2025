@@ -16,3 +16,5 @@ DOCS2025第一届“辽河杯”数据驱动的复杂系统优化算法竞赛：
 
 7.1    更新competitionPlatform、 simulation、infobuilder、calendarinfo，修复“某些时刻，machines_status中处理时间与MBOM中不一致”的问题
        增加同一工件只有前阶段完成，后阶段才可以处理。修复“同一工件多阶段可并行处理”的问题
+
+7.7    修正“100%达成率时，无法输出数字签名”的问题。
