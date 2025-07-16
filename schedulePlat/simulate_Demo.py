@@ -5,10 +5,10 @@ import pandas as pd
 # 运行仿真
 if __name__ == '__main__':
     # 0. 配置竞赛案例
-    # instance_name = 'num1000_lam0.03_change0__1.txt'
-    instance_name = 'simple_demo.txt'
+    instance_name = "num1000_lam0.03_change0__8.txt"
+        ##'num5000_lam0.016_change0__3.txt'
     instance_names = []
-    path = os.path.join('data', 'instance', 'competition', instance_name)
+    path = os.path.join( 'data', 'instance', 'competition', instance_name)
 
     # 打印当前工作目录和文件路径，以便调试
     print("当前工作目录是:", os.getcwd())
@@ -23,7 +23,7 @@ if __name__ == '__main__':
     team_algorithm = SchedulingAlgorithm()
 
     # 4. 运行仿真
-    result = platform.run_simulation(path, team_algorithm, False)
+    result = platform.run_simulation(path, team_algorithm, True)
     """
     def run_simulation(self, path, algorithm_module, isTimeout=True) -> dict:
     运行仿真案例
@@ -34,7 +34,7 @@ if __name__ == '__main__':
 
     """
     # 5. 输出结果
-    orders = platform.getOrders()
+    orders = platform.getOrders(False)
     print("\n仿真结果:")
     print(f"订单达成率: {orders['fulfillment_rate'].values[0]:.2%}")
     platform.getGantta(600, 900)
