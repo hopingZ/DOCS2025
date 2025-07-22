@@ -5,9 +5,59 @@ import torch
 from torch import optim, nn
 from tqdm import tqdm
 
-from data.env_seed_generator import generate_process_time_info, generate_orders
+from data.env_seed_generator import generate_process_time_info, generate_orders, load_env_seed_from_txt, \
+    get_num_types_and_stages
 from training.pn_env import PNEnv
 from training.state_to_numpy import pnstate_to_vectors
+
+
+def benchmark(model, fp):
+    process_time_info, orders = load_env_seed_from_txt(fp)
+    num_types, num_stages = get_num_types_and_stages(process_time_info)
+    pn_env = PNEnv()
+    pn_env.reset(process_time_info, num_types, num_stages, orders)
+
+    accumulated_reward = 0
+    while True:
+        '''with torch.no_grad():
+            logits = get_logits(
+                pn_env.cur_pn_state,
+                pn_env.due_time_of_order_,
+                model
+            )
+            mask = torch.full_like(logits, fill_value=-torch.inf)
+
+            for transition_idx, transition_name in enumerate(pn_env.cur_pn_state.transition_names):
+                if transition_name in pn_env.cur_enable_transitions:
+                    mask[0, transition_idx, 0] = 100. if 'begin' in transition_name else 0.  # TODO
+
+            action = (logits + mask).squeeze().argmax().item()'''
+
+        enable_transitions = pn_env.cur_enable_transitions
+        if any([enable_transition.startswith('begin') for enable_transition in enable_transitions]):
+            begin_transition_names = [
+                enable_transition for enable_transition in enable_transitions if
+                enable_transition.startswith('begin')
+            ]
+            cost_times = [pn_env.cur_pn_state.delay_of_place_named['_'.join(begin_transition_name.split('_')[1:-1])]
+                          for begin_transition_name in begin_transition_names]
+            firing_transition_name = begin_transition_names[np.argmin(cost_times).item()]
+        else:
+            working_place_names = [enable_transition.replace('end_', '') for enable_transition in enable_transitions]
+            left_times = [pn_env.cur_pn_state.delay_of_place_named[place_name] -
+                          (pn_env.cur_pn_state.x_of_place_named[place_name] if place_name in pn_env.cur_pn_state.x_of_place_named else 0)
+                          for place_name in working_place_names]
+            firing_transition_name = enable_transitions[np.argmin(left_times).item()]
+
+        # firing_transition_name = pn_env.cur_pn_state.transition_names[action]
+        # print(firing_transition_name)
+        _, reward, done, info = pn_env.step(firing_transition_name)
+        accumulated_reward += reward
+
+        if done:
+            break
+
+    return accumulated_reward
 
 
 def get_logits(pn_state, due_time_of_order_, model):
@@ -37,7 +87,12 @@ def get_logits(pn_state, due_time_of_order_, model):
     nn_input = np.stack([m, x, delay, rest], axis=-1)
     nn_input = torch.tensor(nn_input, dtype=torch.float32)
     nn_input = nn_input.unsqueeze(0)
-    logits = model(nn_input, C_t_stack, C_stack)
+
+    nn_input = nn_input.to(model.device)
+    C_t_stack = C_t_stack.to(model.device)
+    C_stack = C_stack.to(model.device)
+    attention_mask = torch.ones([1, C_pre.shape[0] + C_pre.shape[1]]).to(model.device)
+    logits = model(nn_input, C_t_stack, C_stack, attention_mask)
     return logits
 
 
@@ -104,6 +159,11 @@ def get_logits_batch(pn_state, due_time_of_order_, model):
     C_t_stack = torch.tensor(C_t_stack, dtype=torch.float32)
     C_stack = torch.tensor(C_stack, dtype=torch.float32)
     attention_mask = torch.tensor(attention_mask, dtype=torch.bool)
+
+    nn_input = nn_input.to(model.device)
+    C_t_stack = C_t_stack.to(model.device)
+    C_stack = C_stack.to(model.device)
+    attention_mask = attention_mask.to(model.device)
     logits = model(
         nn_input, C_t_stack, C_stack,
         attention_mask=attention_mask,  # [B, |T| + |P|]
@@ -112,34 +172,81 @@ def get_logits_batch(pn_state, due_time_of_order_, model):
 
 
 def train():
+    from pathlib import Path
+    for fp in Path('../schedulePlat/data/instance/competition/').glob('*.txt'):
+        accumulated_reward = benchmark(None, fp)
+        print(fp, accumulated_reward)
     import random
     from models.pncn import PNCN
     from torch.distributions import Categorical
 
-    model = PNCN(
-        num_classes=2, in_channel=4, num_pnc_layers=3, hidden_channel=128, expand_ratio=0.25,
-        num_transformer_layers=3,
-        num_attention_heads=4,
-        transformer_intermediate_size=128,
-    )
-    optimizer = optim.AdamW(model.parameters(), lr=0.0001)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     num_envs = 10
+
+    model = PNCN(
+        num_classes=2, in_channel=4, num_pnc_layers=5, hidden_channel=512, expand_ratio=0.25,
+        num_transformer_layers=3,
+        num_attention_heads=4,
+        transformer_intermediate_size=512,
+    ).to(device)
+    model.device = device
+
+    optimizer = optim.AdamW(model.parameters(), lr=0.0001)
+
     pn_envs = [PNEnv() for _ in range(num_envs)]
 
-    num_types, num_stages = 5, 5
-    num_machines_per_stage = 5
-    '''lam = 0.0083
-    num_orders = 30
-    process_time_lb, process_time_rb = 121, 140
-    due_lb, due_rb = 800, 1200'''
+    settings = [
+        {
+            "num_types": 5,
+            "num_stages": 5,
+            "num_machines_per_stage": 5,
+            "lam": 0.0083,
+            "num_orders": 50,
+            "process_time_lb": 60,
+            "process_time_rb": 120,
+            "due_lb": 700,
+            "due_rb": 1200,
+        },
+        {
+            "num_types": 5,
+            "num_stages": 5,
+            "num_machines_per_stage": 5,
+            "lam": 0.016,
+            "num_orders": 50,
+            "process_time_lb": 60,
+            "process_time_rb": 120,
+            "due_lb": 700,
+            "due_rb": 1200,
+        },
+        {
+            "num_types": 5,
+            "num_stages": 5,
+            "num_machines_per_stage": 5,
+            "lam": 0.03,
+            "num_orders": 50,
+            "process_time_lb": 60,
+            "process_time_rb": 120,
+            "due_lb": 700,
+            "due_rb": 1200,
+        },
+    ]
 
-    lam = 0.03
-    num_orders = 20
-    process_time_lb, process_time_rb = 100, 160
-    due_lb, due_rb = 800, 1200
-
+    num_turns = 0
+    temperature = 1.0
     while True:
+        # 根据环境参数生成 seed
+        setting = random.choice(settings)
+        num_types = setting["num_types"]
+        num_stages = setting["num_stages"]
+        num_machines_per_stage = setting["num_machines_per_stage"]
+        process_time_lb = setting["process_time_lb"]
+        process_time_rb = setting["process_time_rb"]
+        lam = setting["lam"]
+        num_orders = setting["num_orders"]
+        due_lb = setting["due_lb"]
+        due_rb = setting["due_rb"]
+
         process_time_info = generate_process_time_info(
             num_types,
             num_stages,
@@ -148,38 +255,43 @@ def train():
             process_time_rb
         )
         orders = generate_orders(num_orders, lam, due_lb, due_rb, num_types)
+
         due_time_of_order_ = {
             order['order_id']: order['due_date']
             for order in orders
         }
 
-        for pn_env in pn_envs:
-            pn_env.reset(process_time_info, num_types, num_stages, orders)
-
+        # 收集训练数据
+        print('========= collecting =========')
         accumulated_rewards = [0 for _ in range(num_envs)]
         trajectories = [[] for _ in range(num_envs)]
         done_flags = [False for _ in range(num_envs)]
 
-        print('========= collecting =========')
+        for pn_env in pn_envs:
+            pn_env.reset(process_time_info, num_types, num_stages, orders)
+
         model.eval()
         while True:
+            # 使用当前模型采样动作
             with torch.no_grad():
                 logits = get_logits_batch(
                     [pn_env.cur_pn_state for pn_env in pn_envs],
                     [pn_env.due_time_of_order_ for pn_env in pn_envs],
                     model
                 )
-            mask = torch.full_like(logits, fill_value=-torch.inf)
+                mask = torch.full_like(logits, fill_value=-torch.inf)
 
-            for env_idx, pn_env in enumerate(pn_envs):
-                for transition_idx, transition_name in enumerate(pn_env.cur_pn_state.transition_names):
-                    if transition_name in pn_env.cur_enable_transitions:
-                        mask[env_idx, transition_idx, 0] = 0.
+                for env_idx, pn_env in enumerate(pn_envs):
+                    for transition_idx, transition_name in enumerate(pn_env.cur_pn_state.transition_names):
+                        if transition_name in pn_env.cur_enable_transitions:
+                            mask[env_idx, transition_idx, 0] = 0.
 
-            probs = nn.functional.softmax(logits + mask, dim=-2)
-            probs[probs.isnan()] = 1 / probs.shape[1]
-            dist = Categorical(probs.squeeze())
-            actions = dist.sample()
+                probs = nn.functional.softmax(logits / temperature + mask, dim=-2)
+                probs[probs.isnan()] = 1 / probs.shape[1]
+                dist = Categorical(probs.squeeze())
+                actions = dist.sample()
+
+            # 更新环境并存储
             for env_idx in range(len(pn_envs)):
                 if done_flags[env_idx]:
                     continue
@@ -189,7 +301,8 @@ def train():
 
                 last_pn_state = deepcopy(pn_envs[env_idx].cur_pn_state)
                 _, reward, done, info = pn_envs[env_idx].step(firing_transition_name)
-                if not done_flags[env_idx] and "ignore" not in info and firing_transition_name.startswith('begin'):
+
+                if not done_flags[env_idx] and "ignore" not in info:
                     trajectories[env_idx].append((
                             last_pn_state,
                             action.item(),
@@ -207,12 +320,20 @@ def train():
 
         print(accumulated_rewards)
         accumulated_rewards = np.array(accumulated_rewards)
-        advantages = (accumulated_rewards - accumulated_rewards.mean()) / (accumulated_rewards.std() + 1e-6)
+        if accumulated_rewards.std() < 1:
+            temperature += 0.2
+            continue
+        else:
+            temperature = 1.0
 
-        update_steps = 2
+        advantages = (accumulated_rewards - accumulated_rewards.mean()) / (accumulated_rewards.std() + 1e-6)
+        print(accumulated_rewards.std())
+
+        update_steps = 20
         batch_size = 64
 
         model.train()
+        optimizer.zero_grad()
         print('========= training =========')
         for _ in tqdm(range(update_steps)):
             input_states = []
@@ -226,13 +347,22 @@ def train():
                 input_states.append(pn_state)
 
             logits = get_logits_batch(input_states, [due_time_of_order_] * batch_size, model)
-            loss = -torch.tensor(advantage_labels, dtype=torch.float) @ \
+            loss = -torch.tensor(advantage_labels, dtype=torch.float).to(model.device) @ \
                 torch.softmax(logits, dim=-2)[range(batch_size), action_labels]
+            loss = loss / update_steps
             print(loss)
 
-            optimizer.zero_grad()
             loss.backward()
-            optimizer.step()
+
+        optimizer.step()
+
+
+        if num_turns % 5 == 0:
+            model.eval()
+            accumulated_rewards = benchmark(model, '../schedulePlat/data/instance/competition/num1000_lam0.03_change0__8.txt')
+            # accumulated_rewards = benchmark(model, './schedulePlat/data/instance/competition/num1000_lam0.03_change0__8.txt')
+            print(accumulated_rewards)
+        num_turns += 1
 
 
 if __name__ == '__main__':

@@ -115,6 +115,60 @@ def save_env_seed_as_txt(process_time_info, orders, fp):
         fw.write(' '.join([str(orders[i]['due_date']) for i in range(len(orders))]) + '\n')
 
 
+def load_env_seed_from_txt(file_path):
+    with open(file_path, 'r') as f:
+        # 读取第一行：类型数、阶段数、总机器数
+        line = f.readline().split()
+        num_types = int(line[0])
+        num_stages = int(line[1])
+        total_machines = int(line[2])
+
+        # 读取第二行：每个阶段的机器数
+        machines_per_stage = list(map(int, f.readline().split()))
+
+        # 读取处理时间矩阵（类型 x 机器）
+        process_times = []
+        for _ in range(num_types):
+            row = list(map(int, f.readline().split()))
+            process_times.append(row)
+
+        # 转置矩阵：机器 x 类型
+        machine_times = []
+        for j in range(total_machines):
+            mt = []
+            for i in range(num_types):
+                mt.append(process_times[i][j])
+            machine_times.append(mt)
+
+        # 重建process_time_info数据结构
+        process_time_info = []
+        machine_idx = 0
+        for stage in range(num_stages):
+            stage_dict = {}
+            for _ in range(machines_per_stage[stage]):
+                stage_dict[machine_idx] = machine_times[machine_idx]
+                machine_idx += 1
+            process_time_info.append(stage_dict)
+
+        # 读取订单数据
+        order_ids = f.readline().split()
+        product_types = f.readline().split()
+        arrival_times = list(map(int, f.readline().split()))
+        due_dates = list(map(int, f.readline().split()))
+
+        # 构建orders列表
+        orders = []
+        for i in range(len(order_ids)):
+            orders.append({
+                'order_id': order_ids[i],
+                'product_type': product_types[i],
+                'arrival_time': arrival_times[i],
+                'due_date': due_dates[i]
+            })
+
+    return process_time_info, orders
+
+
 def unit_test():
     process_time_info, orders = env_seed_generator(
         lam=10,
