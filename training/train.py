@@ -60,6 +60,162 @@ def benchmark(model, fp):
     return accumulated_reward
 
 
+def benchmark(model, fp):
+    process_time_info, orders = load_env_seed_from_txt(fp)
+    num_types, num_stages = get_num_types_and_stages(process_time_info)
+    pn_env = PNEnv()
+    pn_env.reset(process_time_info, num_types, num_stages, orders)
+
+    accumulated_reward = 0
+    while True:
+        enable_transitions = deepcopy(pn_env.cur_enable_transitions)
+        if any([enable_transition.startswith('begin') for enable_transition in enable_transitions]):
+            begin_transition_names = [
+                enable_transition for enable_transition in enable_transitions if
+                enable_transition.startswith('begin')
+            ]
+            # TODO: 预估未来时间，剔除不可能达成的变迁
+            begin_transition_names_to_remove = []
+            estimated_left_time_of_transition_named_ = {}
+            for begin_transition_name in begin_transition_names:
+                s, t, m, o = begin_transition_name.split('_')[1:]
+                next_stage_time = pn_env.cur_pn_state.delay_of_place_named['_'.join([s, t, m])]
+                estimated_left_time = next_stage_time
+                t_idx = int(t[1:])
+                for s_idx in range(int(s[1:]) + 1, num_stages):
+                    estimated_left_time += min([_[t_idx] for _ in process_time_info[s_idx].values()])
+                estimated_left_time_of_transition_named_[begin_transition_name] = estimated_left_time
+
+                if estimated_left_time > pn_env.due_time_of_order_[o[1:]] - pn_env.cur_pn_state.cur_time:
+                    begin_transition_names_to_remove.append(begin_transition_name)
+
+            begin_transition_names = [begin_transition_name for begin_transition_name in begin_transition_names if begin_transition_name not in begin_transition_names_to_remove]
+
+            if begin_transition_names:
+                cost_times = [pn_env.cur_pn_state.delay_of_place_named['_'.join(begin_transition_name.split('_')[1:-1])]
+                              for begin_transition_name in begin_transition_names]
+                firing_transition_name = begin_transition_names[np.argmin(cost_times).item()]
+                s, t, m, o = firing_transition_name.split('_')[1:]
+                transition_names_using_m = [begin_transition_name for begin_transition_name in begin_transition_names if m in begin_transition_name]
+                if len(transition_names_using_m) > 1:  # 有竞争
+                    firing_transition_name = transition_names_using_m[0]
+                    shortest_estimated_left_time = estimated_left_time_of_transition_named_[firing_transition_name]
+                    for transition_name in transition_names_using_m[1:]:
+                        if estimated_left_time_of_transition_named_[transition_name] < shortest_estimated_left_time:
+                            shortest_estimated_left_time = estimated_left_time_of_transition_named_[transition_name]
+                            firing_transition_name = transition_name
+
+            else:
+                enable_transitions = [enable_transition for enable_transition in enable_transitions if enable_transition.startswith('end')]
+                working_place_names = [enable_transition.replace('end_', '') for enable_transition in
+                                       enable_transitions]
+                left_times = [pn_env.cur_pn_state.delay_of_place_named[place_name] -
+                              (pn_env.cur_pn_state.x_of_place_named[
+                                   place_name] if place_name in pn_env.cur_pn_state.x_of_place_named else 0)
+                              for place_name in working_place_names]
+                firing_transition_name = enable_transitions[np.argmin(left_times).item()]
+
+        else:
+            working_place_names = [enable_transition.replace('end_', '') for enable_transition in enable_transitions]
+            left_times = [pn_env.cur_pn_state.delay_of_place_named[place_name] -
+                          (pn_env.cur_pn_state.x_of_place_named[place_name] if place_name in pn_env.cur_pn_state.x_of_place_named else 0)
+                          for place_name in working_place_names]
+            firing_transition_name = enable_transitions[np.argmin(left_times).item()]
+
+        # firing_transition_name = pn_env.cur_pn_state.transition_names[action]
+        # print(firing_transition_name)
+
+        '''num_enable_transitions = len(pn_env.cur_enable_transitions)
+        num_tokens_in_system = sum(pn_env.cur_pn_state.m_of_place_named.values())
+        num_orders_in_system = len(pn_env.cur_pn_state.order_of_place_named)
+        num_places = len(pn_env.cur_pn_state.place_names)
+        num_transitions = len(pn_env.cur_pn_state.transition_names)
+        sum_x = sum(pn_env.cur_pn_state.x_of_place_named.values())
+        # print information
+        print(f'num_enable_transitions: {num_enable_transitions}, num_tokens_in_system: {num_tokens_in_system}, '
+              f'num_orders_in_system: {num_orders_in_system}, num_places: {num_places}, '
+              f'num_transitions: {num_transitions}, sum_x: {sum_x}')'''
+
+        _, reward, done, info = pn_env.step(firing_transition_name)
+        accumulated_reward += reward
+
+        if done:
+            break
+
+    return accumulated_reward
+
+
+"""def benchmark(model, fp):
+    process_time_info, orders = load_env_seed_from_txt(fp)
+    num_types, num_stages = get_num_types_and_stages(process_time_info)
+    pn_env = PNEnv()
+    pn_env.reset(process_time_info, num_types, num_stages, orders)
+
+    accumulated_reward = 0
+    while True:
+        with torch.no_grad():
+            logits = get_logits(
+                pn_env.cur_pn_state,
+                pn_env.due_time_of_order_,
+                model
+            )
+            mask = torch.full_like(logits, fill_value=-torch.inf)
+
+            '''for transition_idx, transition_name in enumerate(pn_env.cur_pn_state.transition_names):
+                if transition_name in pn_env.cur_enable_transitions:
+                    mask[0, transition_idx, 0] = 100. if 'begin' in transition_name else 0.  # TODO'''
+
+            for transition_idx, transition_name in enumerate(pn_env.cur_pn_state.transition_names):
+                if transition_name in pn_env.cur_enable_transitions:
+                    # mask[0, transition_idx, 0] = 0.  # TODO
+                    mask[0, transition_idx, 0] = 100. if 'begin' in transition_name else 0.  # TODO
+
+            # print((logits + mask).squeeze())
+            action = (logits + mask).squeeze().argmax().item()
+
+        '''enable_transitions = pn_env.cur_enable_transitions
+        if any([enable_transition.startswith('begin') for enable_transition in enable_transitions]):
+            begin_transition_names = [
+                enable_transition for enable_transition in enable_transitions if
+                enable_transition.startswith('begin')
+            ]
+            cost_times = [pn_env.cur_pn_state.delay_of_place_named['_'.join(begin_transition_name.split('_')[1:-1])]
+                          for begin_transition_name in begin_transition_names]
+            firing_transition_name = begin_transition_names[np.argmin(cost_times).item()]
+        else:
+            working_place_names = [enable_transition.replace('end_', '') for enable_transition in enable_transitions]
+            left_times = [pn_env.cur_pn_state.delay_of_place_named[place_name] -
+                          (pn_env.cur_pn_state.x_of_place_named[place_name] if place_name in pn_env.cur_pn_state.x_of_place_named else 0)
+                          for place_name in working_place_names]
+            firing_transition_name = enable_transitions[np.argmin(left_times).item()]'''
+
+        firing_transition_name = pn_env.cur_pn_state.transition_names[action]
+        # print(pn_env.cur_pn_state.m_of_place_named)
+        # print(pn_env.cur_enable_transitions)
+        #print(firing_transition_name)
+        #print(len(pn_env.cur_pn_state.transition_names), len(pn_env.cur_pn_state.place_names))
+
+        num_enable_transitions = len(pn_env.cur_enable_transitions)
+        num_tokens_in_system = sum(pn_env.cur_pn_state.m_of_place_named.values())
+        num_orders_in_system = len(pn_env.cur_pn_state.order_of_place_named)
+        num_places = len(pn_env.cur_pn_state.place_names)
+        num_transitions = len(pn_env.cur_pn_state.transition_names)
+        sum_x = sum(pn_env.cur_pn_state.x_of_place_named.values())
+        # print information
+        print(f'num_enable_transitions: {num_enable_transitions}, num_tokens_in_system: {num_tokens_in_system}, '
+              f'num_orders_in_system: {num_orders_in_system}, num_places: {num_places}, '
+              f'num_transitions: {num_transitions}, sum_x: {sum_x}')
+
+        _, reward, done, info = pn_env.step(firing_transition_name)
+        accumulated_reward += reward
+
+        if done:
+            break
+
+    return accumulated_reward"""
+
+
+
 def get_logits(pn_state, due_time_of_order_, model):
     pn_state_npy = pnstate_to_vectors(pn_state, due_time_of_order_)
     C_pre = pn_state_npy["C_pre"]
@@ -83,7 +239,8 @@ def get_logits(pn_state, due_time_of_order_, model):
     x = pn_state_npy["x"]
     delay = pn_state_npy["delay"]
     rest = pn_state_npy["rest"]
-    rest[rest == np.inf] = delay.sum()
+    # rest[rest == np.inf] = delay.sum()
+    rest[rest == np.inf] = 0.
     nn_input = np.stack([m, x, delay, rest], axis=-1)
     nn_input = torch.tensor(nn_input, dtype=torch.float32)
     nn_input = nn_input.unsqueeze(0)
@@ -92,6 +249,8 @@ def get_logits(pn_state, due_time_of_order_, model):
     C_t_stack = C_t_stack.to(model.device)
     C_stack = C_stack.to(model.device)
     attention_mask = torch.ones([1, C_pre.shape[0] + C_pre.shape[1]]).to(model.device)
+
+    print('rest_sum', nn_input[:, :, -1].sum())
     logits = model(nn_input, C_t_stack, C_stack, attention_mask)
     return logits
 
@@ -127,7 +286,8 @@ def get_logits_batch(pn_state, due_time_of_order_, model):
     rests = [b["rest"] for b in pn_state_batch]
 
     for i in range(len(pn_state_batch)):
-        rests[i][rests[i] == np.inf] = delay[i].sum()
+        # rests[i][rests[i] == np.inf] = delay[i].sum()
+        rests[i][rests[i] == np.inf] = 0.
 
     p_lens = [ont_C_pre.shape[0] for ont_C_pre in C_pre]
     t_lens = [ont_C_pre.shape[1] for ont_C_pre in C_pre]
@@ -173,15 +333,32 @@ def get_logits_batch(pn_state, due_time_of_order_, model):
 
 def train():
     from pathlib import Path
-    for fp in Path('../schedulePlat/data/instance/competition/').glob('*.txt'):
-        accumulated_reward = benchmark(None, fp)
+
+    from pg import PNCN
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    model = PNCN(
+        num_classes=2, in_channel=4, num_pnc_layers=5, hidden_channel=256, expand_ratio=0.25,
+        num_transformer_layers=3,
+        num_attention_heads=4,
+        transformer_intermediate_size=256,
+    ).to(device)
+    model.load_state_dict(torch.load('../old_policy_net_0724.pth'))
+    model.device = device
+    model.eval()
+
+    # for fp in ['../schedulePlat/data/instance/competition/num2000_lam0.05_change0__2.txt']:
+    for fp in Path('../schedulePlat/data/instance/competition/').glob('num2000*.txt'):
+        accumulated_reward = benchmark(model, fp)
         print(fp, accumulated_reward)
-    import random
+
+
+
+    '''import random
     from models.pncn import PNCN
     from torch.distributions import Categorical
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
+    
     num_envs = 10
 
     model = PNCN(
@@ -362,7 +539,7 @@ def train():
             accumulated_rewards = benchmark(model, '../schedulePlat/data/instance/competition/num1000_lam0.03_change0__8.txt')
             # accumulated_rewards = benchmark(model, './schedulePlat/data/instance/competition/num1000_lam0.03_change0__8.txt')
             print(accumulated_rewards)
-        num_turns += 1
+        num_turns += 1'''
 
 
 if __name__ == '__main__':

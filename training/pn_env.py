@@ -135,6 +135,8 @@ class PNEnv:
         self.orders = None
         self.cur_enable_transitions = None
         self.due_time_of_order_ = None
+        self.process_time_info = None
+        self.num_stages = None
 
     def reset(
             self,
@@ -143,6 +145,8 @@ class PNEnv:
             num_stages,
             orders,
     ):
+        self.num_stages = num_stages
+        self.process_time_info = process_time_info
         self.due_time_of_order_ = {
             order['order_id']: order['due_date']
             for order in orders
@@ -157,6 +161,23 @@ class PNEnv:
         )
         self.orders = orders
         self.cur_enable_transitions = self.get_enable_transitions(self.cur_pn_state)
+
+        while not self.cur_enable_transitions or self.is_all_overdue():
+            if self.orders:
+                new_orders = []
+                new_time = self.orders[-1]['arrival_time']
+                while self.orders and self.orders[-1]['arrival_time'] == new_time:
+                    new_orders.append(self.orders.pop())
+
+                self.cur_pn_state = self.get_pn_state_added_new_orders(
+                    pn_state=self.cur_pn_state,
+                    new_orders=new_orders,
+                    timestep=new_time - self.cur_pn_state.cur_time,
+                )
+                self.cur_enable_transitions = self.get_enable_transitions(self.cur_pn_state)
+            else:
+                done = True
+
         return self.cur_pn_state
 
     @staticmethod
@@ -376,6 +397,27 @@ class PNEnv:
 
         return enable_transition_names
 
+    def is_all_overdue(self):
+        for cur_enable_transition in self.cur_enable_transitions:
+            if cur_enable_transition.startswith('end'):
+                return False
+
+            begin_transition_name = cur_enable_transition
+            s, t, m, o = begin_transition_name.split('_')[1:]
+            next_stage_time = self.cur_pn_state.delay_of_place_named['_'.join([s, t, m])]
+            estimated_left_time = next_stage_time
+            t_idx = int(t[1:])
+            for s_idx in range(int(s[1:]) + 1, self.num_stages):
+                estimated_left_time += min([_[t_idx] for _ in self.process_time_info[s_idx].values()])
+
+            if estimated_left_time <= self.due_time_of_order_[o[1:]] - self.cur_pn_state.cur_time:
+                return False
+
+            '''if self.cur_pn_state.cur_time + self.cur_pn_state.delay_of_place_named[self.cur_pn_state.post_place_names_of_transition_named[cur_enable_transition][0]] <= self.due_time_of_order_[cur_enable_transition.split('_O')[-1]]:
+                return False'''
+
+        return True
+
     def step(self, transition_name):
         assert transition_name in self.cur_enable_transitions, f"transition {transition_name} is not enable"
 
@@ -430,19 +472,34 @@ class PNEnv:
                     self.cur_pn_state = self.get_next_firing_end_transition(transition_name, self.cur_pn_state)
                     break
 
+        # ==================
+        # 过期结构拆除
+        # ==================
+        transitions_to_remove = []
+        places_to_remove = []
+        for place_name, order_idx in self.cur_pn_state.order_of_place_named.items():
+            due_time = self.due_time_of_order_[order_idx]
+            if due_time <= self.cur_pn_state.cur_time and ('waiting' in place_name or 'pool' in place_name):
+                places_to_remove.append(place_name)
+                overdue_transitions = [overdue_t for overdue_t in self.cur_pn_state.transition_names if overdue_t.endswith(f'_O{order_idx}')]
+                transitions_to_remove.extend(overdue_transitions)
+
+        for transition_to_remove in transitions_to_remove:
+            self.cur_pn_state.post_place_names_of_transition_named.pop(transition_to_remove)
+            self.cur_pn_state.pre_place_names_of_transition_named.pop(transition_to_remove)
+            self.cur_pn_state.transition_names.remove(transition_to_remove)
+        for place_to_remove in places_to_remove:
+            self.cur_pn_state.order_of_place_named.pop(place_to_remove)
+            self.cur_pn_state.place_names.remove(place_to_remove)
+            self.cur_pn_state.m_of_place_named.pop(place_to_remove)
+            if place_to_remove in self.cur_pn_state.x_of_place_named:
+                self.cur_pn_state.x_of_place_named.pop(place_to_remove)
+            if place_to_remove in self.cur_pn_state.delay_of_place_named:
+                self.cur_pn_state.delay_of_place_named.pop(place_to_remove)
+
         self.cur_enable_transitions = self.get_enable_transitions(self.cur_pn_state)
 
-        def is_all_overdue():
-            for cur_enable_transition in self.cur_enable_transitions:
-                if cur_enable_transition.startswith('end'):
-                    return False
-
-                if self.cur_pn_state.cur_time + self.cur_pn_state.delay_of_place_named[self.cur_pn_state.post_place_names_of_transition_named[cur_enable_transition][0]] <= self.due_time_of_order_[cur_enable_transition.split('_O')[-1]]:
-                    return False
-
-            return True
-
-        if not self.cur_enable_transitions or is_all_overdue():
+        while not self.cur_enable_transitions or self.is_all_overdue():
             if self.orders:
                 new_orders = []
                 new_time = self.orders[-1]['arrival_time']
@@ -455,8 +512,10 @@ class PNEnv:
                     timestep=new_time - self.cur_pn_state.cur_time,
                 )
                 self.cur_enable_transitions = self.get_enable_transitions(self.cur_pn_state)
+
             else:
                 done = True
+                return self.cur_pn_state, reward, done, info
 
         return self.cur_pn_state, reward, done, info
 
