@@ -18,7 +18,7 @@ if __name__ == '__main__':
     platform = CompetitionPlatform()
 
     # 2. 创建参赛队伍算法实例
-    from X_Algorithm_greedy import SchedulingAlgorithm
+    from X_Algorithm_0804 import SchedulingAlgorithm
 
     team_algorithm = SchedulingAlgorithm()
 

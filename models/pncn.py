@@ -85,4 +85,5 @@ class PNCN(nn.Module):
             attention_mask=attention_mask.unsqueeze(1).unsqueeze(2),
         )['last_hidden_state']
         logits = self.final_fc(res[:, :x_t.shape[1]])
+        logits = -torch.nn.functional.leaky_relu(logits)
         return logits
