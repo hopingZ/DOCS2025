@@ -5,7 +5,7 @@ import pandas as pd
 # 运行仿真
 if __name__ == '__main__':
     # 0. 配置竞赛案例
-    instance_name = "num1000_lam0.03_change0__8.txt"
+    instance_name = "num2000_lam0.05_change0__1.txt"
         ##'num5000_lam0.016_change0__3.txt'
     instance_names = []
     path = os.path.join( 'data', 'instance', 'competition', instance_name)
@@ -18,7 +18,7 @@ if __name__ == '__main__':
     platform = CompetitionPlatform()
 
     # 2. 创建参赛队伍算法实例
-    from algorithm_Demo import SchedulingAlgorithm
+    from X_Algorithm_greedy import SchedulingAlgorithm
 
     team_algorithm = SchedulingAlgorithm()
 
