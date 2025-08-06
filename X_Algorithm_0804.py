@@ -354,6 +354,9 @@ class SchedulingAlgorithm:
         accumulated_reward = 0
         while True:
             enable_transitions = deepcopy(pn_env.cur_enable_transitions)
+            if not enable_transitions:
+                return pd.DataFrame(schedule_data)
+
             begin_transition_names = [
                 enable_transition for enable_transition in enable_transitions if
                 enable_transition.startswith('begin')
