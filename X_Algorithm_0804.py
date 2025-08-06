@@ -441,5 +441,4 @@ class SchedulingAlgorithm:
                     - machine_id: 设备ID
                     - start_time: 计划开始时间
         """
-        print(schedule_data)
         return pd.DataFrame(schedule_data)
