@@ -1,6 +1,9 @@
 from collections import defaultdict
 from copy import deepcopy
 from .pn_state import PNState
+from .pn_successor_fn import get_next_firing_begin_transition as _get_next_firing_begin_transition
+from .pn_successor_fn import get_next_firing_end_transition as _get_next_firing_end_transition
+from .pn_successor_fn import get_enable_transitions as _get_enable_transitions
 
 
 def get_init_pn_state(
@@ -118,6 +121,7 @@ class PNEnv:
         self.process_time_info = None
         self.num_stages = None
         self.num_received_orders = None
+        self.num_done_orders = None
 
     def set(self, cur_pn_state, process_time_info, num_stages, due_time_of_order_):
         self.orders = []
@@ -127,6 +131,7 @@ class PNEnv:
         self.due_time_of_order_ = due_time_of_order_
         self.cur_enable_transitions = self.get_enable_transitions(self.cur_pn_state)
         self.num_received_orders = 0
+        self.num_done_orders = 0
 
     def reset(
             self,
@@ -135,6 +140,7 @@ class PNEnv:
             num_stages,
             orders,
     ):
+        self.num_done_orders = 0
         self.num_stages = num_stages
         self.process_time_info = process_time_info
         self.due_time_of_order_ = {
@@ -178,229 +184,31 @@ class PNEnv:
             firing_transition_name,
             pn_state,
     ):
-        place_names = pn_state.place_names
-        transition_names = pn_state.transition_names
-        post_place_names_of_transition_named = pn_state.post_place_names_of_transition_named
-        pre_place_names_of_transition_named = pn_state.pre_place_names_of_transition_named
-        m_of_place_named = pn_state.m_of_place_named
-        x_of_place_named = pn_state.x_of_place_named
-        delay_of_place_named = pn_state.delay_of_place_named
-        order_of_place_named = pn_state.order_of_place_named
-        cur_time = pn_state.cur_time
-
-        # ========================
-        # marking 处理
-        # ========================
-        src_place_names = pre_place_names_of_transition_named[firing_transition_name]
-        assert len(src_place_names) == 1
-        src_place_name = src_place_names[0]
-        tar_place_names = post_place_names_of_transition_named[firing_transition_name]
-        new_m_of_place_named = m_of_place_named.copy()
-        new_order_of_place_named = order_of_place_named.copy()
-
-        order = order_of_place_named[src_place_name]
-        new_order_of_place_named.pop(src_place_name)
-        new_m_of_place_named[src_place_name] -= 1
-        if new_m_of_place_named[src_place_name] == 0:
-            new_m_of_place_named.pop(src_place_name)
-
-        tar_pool_place_name = None
-        for tar_place_name in tar_place_names:
-            if tar_place_name not in new_m_of_place_named:
-                new_m_of_place_named[tar_place_name] = 1
-            else:
-                new_m_of_place_named[tar_place_name] += 1
-            if 'waiting' in tar_place_name or 'pool' in tar_place_name:
-                tar_pool_place_name = tar_place_name
-                new_order_of_place_named[tar_place_name + f'_O{order}'] = order
-
-        # ========================
-        # 时间处理
-        # ========================
-        if src_place_name not in x_of_place_named:
-            x_of_place_named[src_place_name] = 0
-        timestep = max(0, delay_of_place_named[src_place_name] - x_of_place_named[src_place_name])
-        new_x_of_place_named = {}
-        for place_name in new_m_of_place_named:
-            if '_T' in place_name:
-                if place_name not in x_of_place_named:
-                    x_of_place_named[place_name] = 0
-                new_x_of_place_named[place_name] = min(x_of_place_named[place_name] + timestep,
-                                                       delay_of_place_named[place_name])
-
-        cur_time += timestep
-
-        # ========================
-        # 增加等待池
-        # ========================
-        new_transition_names = transition_names.copy()
-        new_place_names = place_names.copy()
-        new_post_place_names_of_transition_named = post_place_names_of_transition_named.copy()
-        new_pre_place_names_of_transition_named = pre_place_names_of_transition_named.copy()
-
-        new_delay_of_place_named = delay_of_place_named.copy()
-
-        if tar_pool_place_name is None:
-            new_pn_state = PNState(
-                place_names=new_place_names,
-                transition_names=new_transition_names,
-                post_place_names_of_transition_named=new_post_place_names_of_transition_named,
-                pre_place_names_of_transition_named=new_pre_place_names_of_transition_named,
-                m_of_place_named=new_m_of_place_named,
-                x_of_place_named=new_x_of_place_named,
-                delay_of_place_named=new_delay_of_place_named,
-                order_of_place_named=new_order_of_place_named,
-                cur_time=cur_time,
-            )
-            return new_pn_state
-
-        t_str = tar_pool_place_name.split('_')[0]
-        s_str = tar_pool_place_name.split('_')[1].split('-')[-1]
-
-        new_tar_pool_place_name = tar_pool_place_name + f'_O{order}'
-        new_place_names.append(new_tar_pool_place_name)
-
-        transition_names_to_copy = [t for t in transition_names if
-                                    t.startswith(f'begin_{s_str}_{t_str}') and ('_O' not in t)]
-        for transition_name_to_copy in transition_names_to_copy:
-            new_transition_name_to_copy = transition_name_to_copy + f'_O{order}'
-            new_transition_names.append(new_transition_name_to_copy)
-            new_pre_place_names_of_transition_named[new_transition_name_to_copy] = pre_place_names_of_transition_named[
-                transition_name_to_copy].copy()
-            for i in range(len(new_pre_place_names_of_transition_named[new_transition_name_to_copy])):
-                if "waiting" in new_pre_place_names_of_transition_named[new_transition_name_to_copy][i] or "pool" in \
-                        new_pre_place_names_of_transition_named[new_transition_name_to_copy][i]:
-                    new_pre_place_names_of_transition_named[new_transition_name_to_copy][i] = new_tar_pool_place_name
-            new_post_place_names_of_transition_named[new_transition_name_to_copy] = \
-                post_place_names_of_transition_named[transition_name_to_copy].copy()
-
-        new_m_of_place_named[new_tar_pool_place_name] = 1
-        new_m_of_place_named.pop(tar_pool_place_name)
-
-        new_pn_state = PNState(
-            place_names=new_place_names,
-            transition_names=new_transition_names,
-            post_place_names_of_transition_named=new_post_place_names_of_transition_named,
-            pre_place_names_of_transition_named=new_pre_place_names_of_transition_named,
-            m_of_place_named=new_m_of_place_named,
-            x_of_place_named=new_x_of_place_named,
-            delay_of_place_named=new_delay_of_place_named,
-            order_of_place_named=new_order_of_place_named,
-            cur_time=cur_time,
+        return _get_next_firing_end_transition(
+            firing_transition_name,
+            pn_state,
         )
-
-        return new_pn_state
 
     @staticmethod
     def get_next_firing_begin_transition(
             firing_transition_name,
             pn_state,
     ):
-        place_names = pn_state.place_names
-        transition_names = pn_state.transition_names
-        post_place_names_of_transition_named = pn_state.post_place_names_of_transition_named
-        pre_place_names_of_transition_named = pn_state.pre_place_names_of_transition_named
-        m_of_place_named = pn_state.m_of_place_named
-        x_of_place_named = pn_state.x_of_place_named
-        delay_of_place_named = pn_state.delay_of_place_named
-        order_of_place_named = pn_state.order_of_place_named
-        cur_time = pn_state.cur_time
-
-        # ========================
-        # marking 处理
-        # ========================
-        src_place_names = pre_place_names_of_transition_named[firing_transition_name]
-        tar_place_names = post_place_names_of_transition_named[firing_transition_name]
-        assert len(tar_place_names) == 1
-        tar_place_name = tar_place_names[0]
-        src_pool_place_name = None
-        for src_place_name in src_place_names:
-            if 'waiting' in src_place_name or 'pool' in src_place_name:
-                src_pool_place_name = src_place_name
-                break
-        new_m_of_place_named = m_of_place_named.copy()
-        new_order_of_place_named = order_of_place_named.copy()
-
-        order = order_of_place_named[src_pool_place_name]
-        new_order_of_place_named[tar_place_name] = order
-        new_order_of_place_named.pop(src_pool_place_name)
-
-        for src_place_name in src_place_names:
-            new_m_of_place_named[src_place_name] -= 1
-            if new_m_of_place_named[src_place_name] == 0:
-                new_m_of_place_named.pop(src_place_name)
-
-        new_m_of_place_named[tar_place_name] = 1
-
-        # ========================
-        # 移除等待池
-        # ========================
-        new_transition_names = transition_names.copy()
-        new_place_names = place_names.copy()
-        new_post_place_names_of_transition_named = post_place_names_of_transition_named.copy()
-        new_pre_place_names_of_transition_named = pre_place_names_of_transition_named.copy()
-        new_x_of_place_named = x_of_place_named.copy()
-        # new_x_of_place_named[tar_place_name] = 0
-        new_delay_of_place_named = delay_of_place_named.copy()
-
-        transition_names_to_remove = []
-        for transition_name in transition_names:
-            if src_pool_place_name in pre_place_names_of_transition_named[transition_name]:
-                transition_names_to_remove.append(transition_name)
-
-        for transition_name_to_remove in transition_names_to_remove:
-            new_transition_names.remove(transition_name_to_remove)
-            new_post_place_names_of_transition_named.pop(transition_name_to_remove)
-            new_pre_place_names_of_transition_named.pop(transition_name_to_remove)
-
-        place_name_to_remove = src_pool_place_name
-        new_place_names.remove(place_name_to_remove)
-
-        new_pn_state = PNState(
-            place_names=new_place_names,
-            transition_names=new_transition_names,
-            post_place_names_of_transition_named=new_post_place_names_of_transition_named,
-            pre_place_names_of_transition_named=new_pre_place_names_of_transition_named,
-            m_of_place_named=new_m_of_place_named,
-            x_of_place_named=new_x_of_place_named,
-            delay_of_place_named=new_delay_of_place_named,
-            order_of_place_named=new_order_of_place_named,
-            cur_time=cur_time,
+        return _get_next_firing_begin_transition(
+            firing_transition_name,
+            pn_state,
         )
-
-        return new_pn_state
 
     def get_enable_transitions(  # 不只是 PN 定义的不可激发，还包括了 overdue
             self,
             pn_state
     ):
-        m_of_place_named = pn_state.m_of_place_named
-        pre_place_names_of_transition_named = pn_state.pre_place_names_of_transition_named
-        enable_transition_names = []
-        for transition_name in pre_place_names_of_transition_named:
-            pre_place_names = pre_place_names_of_transition_named[transition_name]
-            enable = True
-            for pre_place_name in pre_place_names:
-                if pre_place_name not in m_of_place_named or m_of_place_named[pre_place_name] < 1:
-                    enable = False
-                    break
-
-            # 剔除 overdue
-            if enable and transition_name.startswith('begin'):
-                s, t, m, o = transition_name.split('_')[1:]
-                next_stage_time = pn_state.delay_of_place_named['_'.join([s, t, m])]
-                estimated_left_time = next_stage_time
-                t_idx = int(t[1:])
-                for s_idx in range(int(s[1:]) + 1, self.num_stages):
-                    estimated_left_time += min([_[t_idx] for _ in self.process_time_info[s_idx].values()])
-
-                if estimated_left_time > self.due_time_of_order_[o[1:]] - pn_state.cur_time:
-                    enable = False
-
-            if enable:
-                enable_transition_names.append(transition_name)
-
-        return enable_transition_names
+        return _get_enable_transitions(
+            pn_state,
+            self.num_stages,
+            self.process_time_info,
+            self.due_time_of_order_,
+        )
 
     def step(self, transition_name):
         assert transition_name in self.cur_enable_transitions, f"transition {transition_name} is not enable"
@@ -437,6 +245,11 @@ class PNEnv:
 
             info = {"ignore": True}
         else:
+            if (transition_name.startswith('end') and
+                    len(self.cur_pn_state.post_place_names_of_transition_named[transition_name]) == 1):
+                place_name = transition_name.split('end_')[-1]
+                self.num_done_orders += (self.cur_pn_state.cur_time <= self.due_time_of_order_[
+                    self.cur_pn_state.order_of_place_named[place_name]])
             self.cur_pn_state = next_pn_state
 
         # 会造成时间推移，所以顺便把已经完成的 process 弹出
@@ -447,6 +260,10 @@ class PNEnv:
             for place_name in self.cur_pn_state.x_of_place_named:
                 if self.cur_pn_state.x_of_place_named[place_name] == self.cur_pn_state.delay_of_place_named[place_name]:
                     transition_name = f"end_{place_name}"
+                    if transition_name.startswith('end') and \
+                            len(self.cur_pn_state.post_place_names_of_transition_named[transition_name]) == 1:
+                        self.num_done_orders += (self.cur_pn_state.cur_time <= self.due_time_of_order_[
+                            self.cur_pn_state.order_of_place_named[place_name]])
                     self.cur_pn_state = self.get_next_firing_end_transition(transition_name, self.cur_pn_state)
                     break
 
@@ -457,7 +274,7 @@ class PNEnv:
         places_to_remove = []
         for place_name, order_idx in self.cur_pn_state.order_of_place_named.items():
             due_time = self.due_time_of_order_[order_idx]
-            # TODO: 把不可能达成的一起剔除
+            # 把不可能达成的一起剔除
             if 'waiting' in place_name or 'pool' in place_name:
                 remove = False
 
@@ -465,7 +282,6 @@ class PNEnv:
                     t, _, o = place_name.split('_')
                     t_idx = int(t[1:])
                     s_idx = 0
-
                 else:
                     t, ss, _, o = place_name.split('_')
                     t_idx = int(t[1:])

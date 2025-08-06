@@ -247,6 +247,7 @@ class SchedulingAlgorithm:
         # 获取当前仿真状态
         # platform 提供的函数支持
         orders = platform.getOrders()
+        print(f"订单达成率: {orders['fulfillment_rate'].values[0]:.2%}")
         """
         getOrders(self, only_unfinished=True) -> pd.DataFrame:
         获取订单数据及相关状态信息。
